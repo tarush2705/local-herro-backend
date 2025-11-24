@@ -52,7 +52,9 @@ function pruneMessages() {
 // each: {
 //   id, type, message, latitude, longitude,
 //   requestedById, requestedByName, requestedPhone,
-//   timestamp, acceptedById, acceptedByName, acceptedPhone, acceptedAt
+//   timestamp,
+//   acceptedById, acceptedByName, acceptedPhone, acceptedAt,
+//   resolved, resolvedAt, resolvedById
 // }
 const helpAlerts = [];
 const HELP_ALERT_TTL_MS = 60 * 60 * 1000; // 1 hour
@@ -194,7 +196,7 @@ app.get('/messages', (req, res) => {
   res.json(nearby);
 });
 
-// ---------------- Multi-device HELP alerts ----------------
+// ---------------- Multi-device HELP & SOS alerts ----------------
 
 // POST /help-alerts
 // Body: { fromId, fromName, phone, type, message, latitude, longitude }
@@ -209,7 +211,7 @@ app.post('/help-alerts', (req, res) => {
 
   const alert = {
     id: Date.now().toString() + '-' + Math.floor(Math.random() * 1e6).toString(36),
-    type: type || 'HELP',
+    type: type || 'HELP', // can also be 'SOS'
     message: message.slice(0, 500),
     latitude,
     longitude,
@@ -221,6 +223,9 @@ app.post('/help-alerts', (req, res) => {
     acceptedByName: null,
     acceptedPhone: null,
     acceptedAt: null,
+    resolved: false,
+    resolvedAt: null,
+    resolvedById: null,
   };
 
   helpAlerts.push(alert);
@@ -229,12 +234,13 @@ app.post('/help-alerts', (req, res) => {
   return res.json({ ok: true, alert });
 });
 
-// GET /help-alerts?lat=...&lng=...&radiusKm=5&excludeId=dev-123
+// GET /help-alerts?lat=...&lng=...&radiusKm=5&excludeId=dev-123&requestedById=dev-456
 app.get('/help-alerts', (req, res) => {
   const lat = parseFloat(req.query.lat);
   const lng = parseFloat(req.query.lng);
   const radiusKm = parseFloat(req.query.radiusKm || '5');
   const excludeId = req.query.excludeId || null;
+  const requestedById = req.query.requestedById || null;
 
   if (isNaN(lat) || isNaN(lng)) {
     return res
@@ -246,7 +252,8 @@ app.get('/help-alerts', (req, res) => {
 
   const result = helpAlerts
     .filter((a) => {
-      if (excludeId && a.requestedById === excludeId) return false; // don't show your own
+      if (requestedById && a.requestedById !== requestedById) return false;
+      if (excludeId && a.requestedById === excludeId) return false;
       const d = haversineKm(lat, lng, a.latitude, a.longitude);
       return d <= radiusKm;
     })
@@ -286,6 +293,34 @@ app.post('/help-alerts/:id/accept', (req, res) => {
   alert.acceptedByName = helperName || 'Helper';
   alert.acceptedPhone = helperPhone || null;
   alert.acceptedAt = Date.now();
+
+  return res.json({ ok: true, alert });
+});
+
+// POST /help-alerts/:id/resolve
+// Body: { resolverId }
+app.post('/help-alerts/:id/resolve', (req, res) => {
+  const id = req.params.id;
+  const { resolverId } = req.body || {};
+
+  if (!resolverId) {
+    return res.status(400).json({ error: 'resolverId is required' });
+  }
+
+  pruneHelpAlerts();
+  const alert = helpAlerts.find((a) => a.id === id);
+  if (!alert) {
+    return res.status(404).json({ error: 'Alert not found' });
+  }
+
+  // Only the original requester can resolve
+  if (alert.requestedById !== resolverId) {
+    return res.status(403).json({ error: 'Only the requester can resolve this alert' });
+  }
+
+  alert.resolved = true;
+  alert.resolvedAt = Date.now();
+  alert.resolvedById = resolverId;
 
   return res.json({ ok: true, alert });
 });
