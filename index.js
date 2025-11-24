@@ -1,3 +1,4 @@
+// index.js
 const express = require('express');
 const cors = require('cors');
 
@@ -22,37 +23,87 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
-// ---- Mock users stored on backend ----
-const USERS = [
-  { id: 'u1', name: 'Aditi', profession: 'Doctor', latitude: 19.071, longitude: 72.881 },
-  { id: 'u2', name: 'Rohan', profession: 'Security', latitude: 19.068, longitude: 72.876 },
-  { id: 'u3', name: 'Imran', profession: 'Engineer', latitude: 19.075, longitude: 72.885 },
-  { id: 'u4', name: 'Meera', profession: 'Teacher', latitude: 19.062, longitude: 72.872 },
-  { id: 'u5', name: 'Vikram', profession: 'Volunteer', latitude: 19.082, longitude: 72.89 },
-];
+// ---- In-memory presence store ----
+// key: deviceId -> { id, name, profession, latitude, longitude, lastSeen }
+const presenceMap = new Map();
 
-// ---- API: /nearby-users ----
-// GET /nearby-users?lat=19.07&lng=72.88&radiusKm=5
+// Remove users who have been offline too long
+const STALE_MS = 2 * 60 * 1000; // 2 minutes
+
+function prunePresence() {
+  const now = Date.now();
+  for (const [id, u] of presenceMap.entries()) {
+    if (now - u.lastSeen > STALE_MS) {
+      presenceMap.delete(id);
+    }
+  }
+}
+
+// ---- POST /presence ----
+// Body: { id, name, profession, latitude, longitude }
+app.post('/presence', (req, res) => {
+  const { id, name, profession, latitude, longitude } = req.body || {};
+
+  if (!id || typeof latitude !== 'number' || typeof longitude !== 'number') {
+    return res.status(400).json({
+      error: 'id, latitude and longitude are required in request body',
+    });
+  }
+
+  const now = Date.now();
+  presenceMap.set(id, {
+    id,
+    name: name || 'Guest user',
+    profession: profession || 'Citizen',
+    latitude,
+    longitude,
+    lastSeen: now,
+  });
+
+  prunePresence();
+
+  return res.json({ ok: true });
+});
+
+// ---- GET /nearby-users ----
+// /nearby-users?lat=...&lng=...&radiusKm=5&selfId=abc
 app.get('/nearby-users', (req, res) => {
   const lat = parseFloat(req.query.lat);
   const lng = parseFloat(req.query.lng);
   const radiusKm = parseFloat(req.query.radiusKm || '5');
+  const selfId = req.query.selfId || null;
 
   if (isNaN(lat) || isNaN(lng)) {
-    return res.status(400).json({ error: 'lat and lng query params are required' });
+    return res
+      .status(400)
+      .json({ error: 'lat and lng query params are required' });
   }
 
-  const result = USERS.map((u) => {
+  prunePresence();
+
+  const result = [];
+  for (const u of presenceMap.values()) {
+    if (selfId && u.id === selfId) continue; // don't return yourself
+
     const distanceKm = haversineKm(lat, lng, u.latitude, u.longitude);
-    return { ...u, distanceKm };
-  }).filter((u) => u.distanceKm <= radiusKm);
+    if (distanceKm <= radiusKm) {
+      result.push({
+        id: u.id,
+        name: u.name,
+        profession: u.profession,
+        latitude: u.latitude,
+        longitude: u.longitude,
+        distanceKm,
+      });
+    }
+  }
 
   res.json(result);
 });
 
 // Basic root route
 app.get('/', (req, res) => {
-  res.send('Local Herro backend is running');
+  res.send('Local Herro presence backend is running');
 });
 
 app.listen(PORT, () => {
