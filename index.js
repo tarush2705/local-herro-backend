@@ -402,9 +402,10 @@ User raw text: """${message}"""
 `;
 
     const aiResponse = await openai.responses.create({
-      model: 'gpt-5.1-mini',
+      model: 'gpt-4.1-mini', // or 'gpt-4o-mini' if you prefer
       input: prompt,
     });
+    ;
 
     // Try to read from the new Responses API shape, then fall back
     let suggestion = '';
