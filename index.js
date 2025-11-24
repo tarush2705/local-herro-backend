@@ -377,7 +377,6 @@ app.get('/', (req, res) => {
 app.listen(PORT, () => {
   console.log(`Local Herro backend listening on port ${PORT}`);
 });
-
 // AI: rewrite help message clearly in English + Roman Hindi
 app.post('/ai/rewrite-help', async (req, res) => {
   try {
@@ -407,11 +406,12 @@ User raw text: """${message}"""
       input: prompt,
     });
 
-    // Extract text from Responses API
+    // Try to read from the new Responses API shape, then fall back
     let suggestion = '';
 
-    if (
-      aiResponse &&
+    if (aiResponse.output_text && typeof aiResponse.output_text === 'string') {
+      suggestion = aiResponse.output_text;
+    } else if (
       aiResponse.output &&
       aiResponse.output[0] &&
       aiResponse.output[0].content &&
@@ -422,13 +422,18 @@ User raw text: """${message}"""
     }
 
     if (!suggestion) {
-      return res.status(500).json({ error: 'AI did not return any text' });
+      console.error('Empty AI response:', JSON.stringify(aiResponse, null, 2));
+      return res.status(500).json({ error: 'Empty AI response from model' });
     }
 
     res.json({ suggestion });
   } catch (err) {
-    console.error('Error in /ai/rewrite-help:', err);
-    res.status(500).json({ error: 'Failed to contact AI service' });
+    // This will show the *real* reason in Render logs and (soon) in the app
+    console.error('Error in /ai/rewrite-help:', err?.response?.data || err);
+
+    return res.status(500).json({
+      error: 'AI failed',
+      details: err?.response?.data || err.message || 'unknown',
+    });
   }
 });
-
