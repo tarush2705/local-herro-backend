@@ -1,16 +1,17 @@
-// index.js
 require('dotenv').config();
-
-const OpenAI = require('openai');
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs');
+const { v4: uuid } = require('uuid');
+const OpenAI = require('openai');
 
 const app = express();
-const PORT = process.env.PORT || 4000;
+const PORT = process.env.PORT || 3000;
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 app.use(cors());
 app.use(express.json());
@@ -43,7 +44,7 @@ function prunePresence() {
   }
 }
 
-// ---- Public nearby-chat messages (HomeScreen nearby chat) ----
+// ---- Nearby public messages (location-based /messages) ----
 const messages = [];
 const MAX_MESSAGES = 200;
 const MESSAGE_TTL_MS = 30 * 60 * 1000;
@@ -56,13 +57,6 @@ function pruneMessages() {
 }
 
 // ---- Help alerts (multi-device) ----
-// each: {
-//   id, type, message, latitude, longitude,
-//   requestedById, requestedByName, requestedPhone,
-//   timestamp,
-//   acceptedById, acceptedByName, acceptedPhone, acceptedAt,
-//   resolved, resolvedAt, resolvedById
-// }
 const helpAlerts = [];
 const HELP_ALERT_TTL_MS = 60 * 60 * 1000; // 1 hour
 
@@ -74,7 +68,6 @@ function pruneHelpAlerts() {
 }
 
 // ---- Private messages per alert ----
-// each: { id, alertId, fromId, fromName, text, timestamp }
 const directMessages = [];
 const DIRECT_MSG_TTL_MS = 60 * 60 * 1000;
 
@@ -82,6 +75,21 @@ function pruneDirectMessages() {
   const cutoff = Date.now() - DIRECT_MSG_TTL_MS;
   while (directMessages.length && directMessages[0].timestamp < cutoff) {
     directMessages.shift();
+  }
+}
+
+// ---- GLOBAL CHAT (universal, not location filtered) ----
+const globalChatMessages = [];
+const GLOBAL_CHAT_MAX = 300;
+const GLOBAL_CHAT_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+
+function pruneGlobalChat() {
+  const cutoff = Date.now() - GLOBAL_CHAT_TTL_MS;
+  while (globalChatMessages.length && globalChatMessages[0].timestamp < cutoff) {
+    globalChatMessages.shift();
+  }
+  if (globalChatMessages.length > GLOBAL_CHAT_MAX) {
+    globalChatMessages.splice(0, globalChatMessages.length - GLOBAL_CHAT_MAX);
   }
 }
 
@@ -147,7 +155,7 @@ app.get('/nearby-users', (req, res) => {
   res.json(result);
 });
 
-// ---------------- Nearby public chat (Home) ----------------
+// ---------------- Nearby public chat (location-based /messages) ----------------
 
 // POST /messages
 app.post('/messages', (req, res) => {
@@ -369,15 +377,38 @@ app.post('/help-alerts/:id/messages', (req, res) => {
   res.json({ ok: true, message: msg });
 });
 
-// ---------------- Root ----------------
-app.get('/', (req, res) => {
-  res.send('Local Herro presence + chat + help backend is running');
+// ---------------- GLOBAL CHAT (universal) ----------------
+
+// GET /global-chat
+app.get('/global-chat', (req, res) => {
+  pruneGlobalChat();
+  const sorted = [...globalChatMessages].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+  res.json(sorted);
 });
 
-app.listen(PORT, () => {
-  console.log(`Local Herro backend listening on port ${PORT}`);
+// POST /global-chat
+// Body: { fromId, fromName, text }
+app.post('/global-chat', (req, res) => {
+  const { fromId, fromName, text } = req.body || {};
+  if (!fromId || !text) {
+    return res.status(400).json({ error: 'fromId and text are required' });
+  }
+
+  pruneGlobalChat();
+  const msg = {
+    id: uuid(),
+    fromId,
+    fromName: fromName || 'Someone',
+    text: text.slice(0, 500),
+    timestamp: Date.now(),
+  };
+  globalChatMessages.push(msg);
+  pruneGlobalChat();
+
+  res.json({ ok: true, message: msg });
 });
-// AI: rewrite help message clearly in English + Roman Hindi
+
+// ---------------- AI: rewrite help message ----------------
 app.post('/ai/rewrite-help', async (req, res) => {
   try {
     const { helpType, message } = req.body || {};
@@ -402,12 +433,10 @@ User raw text: """${message}"""
 `;
 
     const aiResponse = await openai.responses.create({
-      model: 'gpt-4.1-mini', // or 'gpt-4o-mini' if you prefer
+      model: 'gpt-4.1-mini', // ✅ correct model
       input: prompt,
     });
-    ;
 
-    // Try to read from the new Responses API shape, then fall back
     let suggestion = '';
 
     if (aiResponse.output_text && typeof aiResponse.output_text === 'string') {
@@ -429,12 +458,19 @@ User raw text: """${message}"""
 
     res.json({ suggestion });
   } catch (err) {
-    // This will show the *real* reason in Render logs and (soon) in the app
     console.error('Error in /ai/rewrite-help:', err?.response?.data || err);
-
     return res.status(500).json({
       error: 'AI failed',
       details: err?.response?.data || err.message || 'unknown',
     });
   }
+});
+
+// ---------------- Root ----------------
+app.get('/', (req, res) => {
+  res.send('Local Herro presence + chat + help backend is running');
+});
+
+app.listen(PORT, () => {
+  console.log(`Local Herro backend listening on port ${PORT}`);
 });
