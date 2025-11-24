@@ -1,4 +1,11 @@
 // index.js
+require('dotenv').config();
+
+const OpenAI = require('openai');
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
 const express = require('express');
 const cors = require('cors');
 
@@ -370,3 +377,58 @@ app.get('/', (req, res) => {
 app.listen(PORT, () => {
   console.log(`Local Herro backend listening on port ${PORT}`);
 });
+
+// AI: rewrite help message clearly in English + Roman Hindi
+app.post('/ai/rewrite-help', async (req, res) => {
+  try {
+    const { helpType, message } = req.body || {};
+
+    if (!message || typeof message !== 'string') {
+      return res.status(400).json({ error: 'message is required' });
+    }
+
+    const safeHelpType = helpType || 'General help';
+
+    const prompt = `
+You are assisting users of a local emergency help app called "Local Herro" in India.
+
+User will send a short rough message (often in Hinglish / casual).
+Your job:
+1. Rewrite ONE short, clear, calm English help alert for nearby people.
+2. Then write ONE short Roman Hindi version (no Devanagari).
+3. No extra commentary, no headings. Just the two paragraphs, max 3 lines each.
+
+Help type: ${safeHelpType}
+User raw text: """${message}"""
+`;
+
+    const aiResponse = await openai.responses.create({
+      model: 'gpt-5.1-mini',
+      input: prompt,
+    });
+
+    // Extract text from Responses API
+    let suggestion = '';
+
+    if (
+      aiResponse &&
+      aiResponse.output &&
+      aiResponse.output[0] &&
+      aiResponse.output[0].content &&
+      aiResponse.output[0].content[0] &&
+      typeof aiResponse.output[0].content[0].text === 'string'
+    ) {
+      suggestion = aiResponse.output[0].content[0].text;
+    }
+
+    if (!suggestion) {
+      return res.status(500).json({ error: 'AI did not return any text' });
+    }
+
+    res.json({ suggestion });
+  } catch (err) {
+    console.error('Error in /ai/rewrite-help:', err);
+    res.status(500).json({ error: 'Failed to contact AI service' });
+  }
+});
+
